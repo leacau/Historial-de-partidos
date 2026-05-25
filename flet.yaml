@@ -1,0 +1,7 @@
+# Configuración para la compilación de Partidos Pro
+assets:
+  path: assets
+
+include:
+  - credenciales.json
+  - config.json

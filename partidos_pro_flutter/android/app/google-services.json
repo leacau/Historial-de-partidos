@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "561211790247",
+    "project_id": "futbol-salvi",
+    "storage_bucket": "futbol-salvi.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:561211790247:android:2a560cbe1ee617591e1c82",
+        "android_client_info": {
+          "package_name": "com.leaestudio.partidos_pro"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "561211790247-qmnig9bvhqetiu1gs4b5cp0rtj97kvbu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.leaestudio.partidos_pro",
+            "certificate_hash": "7a769a1bb7df07e4de40760c1a2cd2fbb91b5fa5"
+          }
+        },
+        {
+          "client_id": "561211790247-ln56lmo3vc0a0ko0rcit7nq9kft3gpq5.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2YOtlvwoLijU4mriwsO3LUTysQojHhv8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "561211790247-ln56lmo3vc0a0ko0rcit7nq9kft3gpq5.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
