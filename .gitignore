@@ -34,3 +34,7 @@ coverage.xml
 .pyre/
 .mypy_cache/
 credentials.json
+credenciales.json
+phone_screen.png
+releases/
+api.py

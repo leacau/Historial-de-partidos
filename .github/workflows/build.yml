@@ -1,0 +1,100 @@
+name: Build & Package (Android & iOS)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ==========================================
+  # Android: APK & App Bundle (AAB)
+  # ==========================================
+  build-android:
+    name: Build Android (APK & AAB)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Dependencies
+        working-directory: partidos_pro_flutter
+        run: flutter pub get
+
+      - name: Run Tests
+        working-directory: partidos_pro_flutter
+        run: flutter test
+
+      - name: Build Android Release APK
+        working-directory: partidos_pro_flutter
+        run: flutter build apk --release
+
+      - name: Build Android App Bundle (AAB)
+        working-directory: partidos_pro_flutter
+        run: flutter build appbundle --release
+
+      - name: Upload Android Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: partidos_pro_flutter/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload Android App Bundle (AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-aab
+          path: partidos_pro_flutter/build/app/outputs/bundle/release/app-release.aab
+
+  # ==========================================
+  # iOS: IPA / Xcode Archive
+  # ==========================================
+  build-ios:
+    name: Build iOS (IPA / Archive)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Dependencies
+        working-directory: partidos_pro_flutter
+        run: flutter pub get
+
+      - name: Build iOS (No Codesign)
+        working-directory: partidos_pro_flutter
+        run: flutter build ios --release --no-codesign
+
+      - name: Package Payload to .ipa
+        working-directory: partidos_pro_flutter
+        run: |
+          mkdir -p build/ios/iphoneos/Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          cd build/ios/iphoneos
+          zip -r PartidosPro-unsigned.ipa Payload
+
+      - name: Upload iOS Package (.ipa)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-ipa
+          path: partidos_pro_flutter/build/ios/iphoneos/PartidosPro-unsigned.ipa

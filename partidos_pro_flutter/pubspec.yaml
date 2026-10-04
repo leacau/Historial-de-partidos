@@ -1,5 +1,5 @@
 name: partidos_pro
-description: "Historial de partidos en Flutter."
+description: 'Historial de partidos en Flutter.'
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -51,7 +51,7 @@ dependencies:
   cloud_firestore: ^6.3.0
   firebase_storage: ^13.3.0
   firebase_auth: ^6.4.0
-  google_sign_in: ^7.2.0
+  google_sign_in: ^6.1.0
   flutter_map: ^8.3.0
   latlong2: ^0.9.1
   geolocator: ^14.0.2
@@ -72,7 +72,6 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
@@ -112,3 +111,4 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
