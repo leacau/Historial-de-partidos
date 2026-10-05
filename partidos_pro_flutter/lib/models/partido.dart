@@ -83,6 +83,12 @@ class Partido {
 
   bool get empato => scoreHijo == scoreRival && !penales;
 
+  String get resultadoTexto {
+    if (gano) return 'Ganó';
+    if (empato) return 'Empató';
+    return 'Perdió';
+  }
+
   bool get esFinal =>
       tipoPartido.trim().toLowerCase() == 'torneo' &&
       fase.trim().toLowerCase() == 'final';

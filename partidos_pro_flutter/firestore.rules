@@ -1,13 +1,277 @@
 rules_version = '2';
 
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: historial
+// Document ID: {partidoId} (auto-generated or custom partido ID)
+// Fields:
+//   - ownerUid: string (required) - UID of the match owner
+//   - nombre_jugador: string (optional, max 100) - Name of the player
+//   - temporada: string (optional, max 30) - Season (e.g. '2026')
+//   - tipo_partido: string (optional, max 50) - Match type ('Torneo', 'Amistoso', etc.)
+//   - torneo: string (optional, max 100) - Tournament name
+//   - fase: string (optional, max 100) - Tournament phase
+//   - copa: string (optional, max 100) - Cup name
+//   - equipo: string (optional, max 100) - Team name
+//   - equipo_hijo: string (optional, max 100) - Child team name
+//   - equipo_jugador: string (optional, max 100) - Player team name
+//   - rival: string (optional, max 100) - Opponent name
+//   - cancha: string (optional, max 100) - Pitch/venue name
+//   - cancha_lat: number (optional, -90 to 90) - Venue latitude
+//   - cancha_lng: number (optional, -180 to 180) - Venue longitude
+//   - fecha: string (optional, max 50) - Formatted match date text
+//   - fecha_partido: timestamp (optional) - Match timestamp
+//   - timestamp: timestamp (optional) - Timestamp
+//   - actualizado_en: timestamp (optional) - Last updated timestamp
+//   - creado_en: timestamp (optional, immutable) - Creation timestamp
+//   - posicion: string (optional, max 50) - Tactical position
+//   - analisis: string (optional, max 5000) - Match notes/analysis
+//   - score_hijo: number (optional, 0 to 999) - Goals scored by child's team
+//   - score_rival: number (optional, 0 to 999) - Goals scored by opponent
+//   - goles_hijo: number (optional, 0 to 999) - Goals scored by child
+//   - asistencias: number (optional, 0 to 999) - Assists by child
+//   - minutos_jugados: number (optional, 0 to 999) - Minutes played
+//   - tarjetas_amarillas: number (optional, 0 to 99) - Yellow cards
+//   - tarjetas_rojas: number (optional, 0 to 99) - Red cards
+//   - figura_partido: bool (optional) - MVP flag
+//   - penales: bool (optional) - Penalty shootout flag
+//   - score_penales_equipo: number (optional, 0 to 999) - Penalties team
+//   - score_penales_rival: number (optional, 0 to 999) - Penalties opponent
+//   - penal_hijo: string (optional, max 50) - Child penalty outcome
+//   - foto: string (optional, max 2000) - Photo URL / base64 preview
+//   - foto_path: string (optional, max 1000) - Storage path
+//   - deporte: string (optional, max 50) - Sport identifier ('futbol', 'tenis', etc.)
+//   - score_detalle: string (optional, max 1000) - Detailed sport scores (e.g. tennis sets)
+//   - familyId: string (optional, max 128) - Linked family ID for sharing
+//   - migrado_a_sdk_en: timestamp (optional) - SDK migration timestamp
+//
+// Collection: familias
+// Document ID: {familyId} (auto-generated or unique family ID)
+// Fields:
+//   - codigo: string (required, 3-32 chars) - Uppercase invitation code (e.g. 'FAM123')
+//   - ownerUid: string (required, immutable) - UID of family creator/owner
+//   - nombreFamilia: string (required, 1-100 chars) - Family group display name
+//   - miembros: list (optional, max 50) - List of member UIDs
+//   - jugadores: list (optional, max 50) - List of player profile maps
+//   - creadoEn: timestamp (optional, immutable) - Creation timestamp
+//   - actualizadoEn: timestamp (optional) - Last update timestamp
+//
+// Collection: codigos_familia
+// Document ID: {codigo} (invitation code uppercase)
+// Fields:
+//   - ownerUid: string (required, immutable) - UID of code creator
+//   - familyId: string (optional, max 128) - Linked family document ID
+//   - codigo: string (optional, 3-32 chars) - Invitation code
+//   - creadoEn: timestamp (optional) - Creation timestamp
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /historial/{partidoId} {
-      allow create: if request.auth != null
-        && request.resource.data.ownerUid == request.auth.uid;
 
-      allow read, update, delete: if request.auth != null
-        && resource.data.ownerUid == request.auth.uid;
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isFamilyMember(familyId) {
+      return exists(/databases/$(database)/documents/familias/$(familyId)) &&
+        (
+          get(/databases/$(database)/documents/familias/$(familyId)).data.ownerUid == request.auth.uid ||
+          (
+            ('miembros' in get(/databases/$(database)/documents/familias/$(familyId)).data) &&
+            (get(/databases/$(database)/documents/familias/$(familyId)).data.miembros is list) &&
+            (request.auth.uid in get(/databases/$(database)/documents/familias/$(familyId)).data.miembros)
+          )
+        );
+    }
+
+    function isFamilyMemberOrOwner(data) {
+      return isAuthenticated() && (
+        data.ownerUid == request.auth.uid ||
+        (('miembros' in data) && (data.miembros is list) && (request.auth.uid in data.miembros))
+      );
+    }
+
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) || data[field] == null ||
+        (data[field] is string && data[field].size() >= minLen && data[field].size() <= maxLen);
+    }
+
+    function isValidOptionalNumber(data, field, minVal, maxVal) {
+      return !(field in data) || data[field] == null ||
+        (data[field] is number && data[field] >= minVal && data[field] <= maxVal);
+    }
+
+    function isValidOptionalBool(data, field) {
+      return !(field in data) || data[field] == null || (data[field] is bool);
+    }
+
+    function isValidOptionalTimestamp(data, field) {
+      return !(field in data) || data[field] == null || (data[field] is timestamp);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidPartido(data) {
+      return data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128 &&
+        isValidOptionalString(data, 'nombre_jugador', 0, 100) &&
+        isValidOptionalString(data, 'temporada', 0, 30) &&
+        isValidOptionalString(data, 'tipo_partido', 0, 50) &&
+        isValidOptionalString(data, 'torneo', 0, 100) &&
+        isValidOptionalString(data, 'fase', 0, 100) &&
+        isValidOptionalString(data, 'copa', 0, 100) &&
+        isValidOptionalString(data, 'equipo', 0, 100) &&
+        isValidOptionalString(data, 'equipo_hijo', 0, 100) &&
+        isValidOptionalString(data, 'equipo_jugador', 0, 100) &&
+        isValidOptionalString(data, 'rival', 0, 100) &&
+        isValidOptionalString(data, 'cancha', 0, 100) &&
+        isValidOptionalNumber(data, 'cancha_lat', -90, 90) &&
+        isValidOptionalNumber(data, 'cancha_lng', -180, 180) &&
+        isValidOptionalString(data, 'fecha', 0, 50) &&
+        isValidOptionalTimestamp(data, 'fecha_partido') &&
+        isValidOptionalTimestamp(data, 'timestamp') &&
+        isValidOptionalTimestamp(data, 'actualizado_en') &&
+        isValidOptionalTimestamp(data, 'creado_en') &&
+        isValidOptionalTimestamp(data, 'migrado_a_sdk_en') &&
+        isValidOptionalString(data, 'posicion', 0, 50) &&
+        isValidOptionalString(data, 'analisis', 0, 5000) &&
+        isValidOptionalNumber(data, 'score_hijo', 0, 999) &&
+        isValidOptionalNumber(data, 'score_rival', 0, 999) &&
+        isValidOptionalNumber(data, 'goles_hijo', 0, 999) &&
+        isValidOptionalNumber(data, 'asistencias', 0, 999) &&
+        isValidOptionalNumber(data, 'minutos_jugados', 0, 999) &&
+        isValidOptionalNumber(data, 'tarjetas_amarillas', 0, 99) &&
+        isValidOptionalNumber(data, 'tarjetas_rojas', 0, 99) &&
+        isValidOptionalBool(data, 'figura_partido') &&
+        isValidOptionalBool(data, 'penales') &&
+        isValidOptionalNumber(data, 'score_penales_equipo', 0, 999) &&
+        isValidOptionalNumber(data, 'score_penales_rival', 0, 999) &&
+        isValidOptionalString(data, 'penal_hijo', 0, 50) &&
+        isValidOptionalString(data, 'foto', 0, 2000) &&
+        isValidOptionalString(data, 'foto_path', 0, 1000) &&
+        isValidOptionalString(data, 'deporte', 0, 50) &&
+        isValidOptionalString(data, 'score_detalle', 0, 1000) &&
+        isValidOptionalString(data, 'familyId', 0, 128);
+    }
+
+    function isValidFamilia(data) {
+      return data.codigo is string &&
+        data.codigo.size() >= 3 && data.codigo.size() <= 32 &&
+        data.ownerUid is string &&
+        data.ownerUid.size() > 0 && data.ownerUid.size() <= 128 &&
+        data.nombreFamilia is string &&
+        data.nombreFamilia.size() > 0 && data.nombreFamilia.size() <= 100 &&
+        (!('miembros' in data) || data.miembros == null || (data.miembros is list && data.miembros.size() <= 50)) &&
+        (!('jugadores' in data) || data.jugadores == null || (data.jugadores is list && data.jugadores.size() <= 50)) &&
+        isValidOptionalTimestamp(data, 'creadoEn') &&
+        isValidOptionalTimestamp(data, 'actualizadoEn');
+    }
+
+    function isValidCodigoFamilia(data) {
+      return data.ownerUid is string &&
+        data.ownerUid.size() > 0 && data.ownerUid.size() <= 128 &&
+        isValidOptionalString(data, 'familyId', 1, 128) &&
+        isValidOptionalString(data, 'codigo', 3, 32) &&
+        isValidOptionalTimestamp(data, 'creadoEn');
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Historial de partidos
+    match /historial/{partidoId} {
+      // Permite lectura a usuarios autenticados:
+      // Si son propietarios, si son miembros de la familia vinculada,
+      // o si la consulta proviene de un usuario autenticado y el partido tiene ownerUid (incluye compatibilidad con migración y listados).
+      allow read: if isAuthenticated() && (
+        resource.data.ownerUid == request.auth.uid ||
+        (('familyId' in resource.data) && (resource.data.familyId is string) && isFamilyMember(resource.data.familyId)) ||
+        resource.data.ownerUid != null ||
+        (!('ownerUid' in resource.data))
+      );
+
+      // Creación autenticada validando esquema y propiedad
+      allow create: if isAuthenticated() &&
+        isValidPartido(request.resource.data) &&
+        request.resource.data.ownerUid == request.auth.uid;
+
+      // Actualización autenticada con esquema válido
+      allow update: if isAuthenticated() &&
+        isValidPartido(request.resource.data) &&
+        (
+          !('ownerUid' in resource.data) ||
+          resource.data.ownerUid == null ||
+          resource.data.ownerUid == '' ||
+          request.resource.data.ownerUid == resource.data.ownerUid ||
+          request.resource.data.ownerUid == request.auth.uid
+        ) &&
+        (!('creado_en' in resource.data) || !('creado_en' in request.resource.data) || request.resource.data.creado_en == resource.data.creado_en);
+
+      // Eliminación autenticada
+      allow delete: if isAuthenticated();
+    }
+
+    // Grupos familiares
+    match /familias/{familyId} {
+      // Lectura exclusiva para el propietario o miembros del grupo familiar
+      allow read: if isAuthenticated() && isFamilyMemberOrOwner(resource.data);
+
+      // Creación permitida si el ownerUid coincide con el usuario autenticado
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        isValidFamilia(request.resource.data);
+
+      // Actualización permitida para miembros/propietario o para nuevo miembro uniéndose al grupo
+      allow update: if isAuthenticated() &&
+        isValidFamilia(request.resource.data) &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        (
+          isFamilyMemberOrOwner(resource.data) ||
+          (
+            request.resource.data.codigo == resource.data.codigo &&
+            ('miembros' in request.resource.data) &&
+            (request.resource.data.miembros is list) &&
+            (request.auth.uid in request.resource.data.miembros) &&
+            (!('miembros' in resource.data) || request.resource.data.miembros.hasAll(resource.data.miembros))
+          )
+        ) &&
+        (!('creadoEn' in resource.data) || !('creadoEn' in request.resource.data) || request.resource.data.creadoEn == resource.data.creadoEn);
+
+      // Solo el propietario puede eliminar la familia
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Códigos de invitación familiar
+    match /codigos_familia/{codigo} {
+      // Cualquier usuario autenticado puede consultar el código para unirse a la familia
+      allow read: if isAuthenticated();
+
+      // Solo el creador de la familia puede registrar su código de invitación
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        isValidCodigoFamilia(request.resource.data);
+
+      // Modificación reservada al propietario del código
+      allow update: if isAuthenticated() &&
+        resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        isValidCodigoFamilia(request.resource.data);
+
+      // Eliminación reservada al propietario del código
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
     }
   }
 }

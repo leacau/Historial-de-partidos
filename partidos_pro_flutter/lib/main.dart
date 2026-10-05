@@ -29,6 +29,8 @@ import 'views/history_view.dart';
 import 'views/stats_view.dart';
 import 'views/gallery_view.dart';
 import 'views/data_management_view.dart';
+import 'widgets/family_group_card.dart';
+import 'widgets/social_share_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -274,6 +276,30 @@ class _HomePageState extends State<HomePage> {
     setState(() => _loading = true);
     try {
       final partidos = await _repo.listPartidos();
+      final inFam = await _repo.isInFamily();
+      if (inFam) {
+        final fam = await _repo.getActiveFamily();
+        if (fam != null && fam.jugadores.isNotEmpty) {
+          final updated = List<Jugador>.from(_jugadores);
+          bool changed = false;
+          for (final fj in fam.jugadores) {
+            final idx = updated.indexWhere(
+              (j) => j.nombre.trim().toLowerCase() == fj.nombre.trim().toLowerCase(),
+            );
+            if (idx == -1) {
+              updated.add(fj);
+              changed = true;
+            }
+          }
+          if (changed) {
+            _jugadores = updated;
+            if (_jugadorActivo == null || _jugadorActivo!.id == 'default') {
+              _jugadorActivo = updated.first;
+            }
+            await _savePlayers();
+          }
+        }
+      }
       setState(() => _partidos = partidos);
       await _maybeRunAutoBackup(partidos);
     } catch (e) {
@@ -1089,21 +1115,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _share(Partido p) async {
-    final result = p.gano ? 'Ganamos' : (p.empato ? 'Empate' : 'Buen partido');
-    final text = [
-      '$result: ${p.equipo} ${p.marcador} ${p.rival}',
-      'Evento: ${p.torneo}',
-      'Temporada: ${p.temporada}',
-      'Fecha: ${p.fechaTexto}',
-      'Cancha: ${p.cancha}',
-      'Goles de ${p.nombreJugador}: ${p.golesHijo}',
-      if (p.asistencias > 0) 'Asistencias: ${p.asistencias}',
-      if (p.figuraPartido) 'Figura del partido',
-      'Posición: ${p.posicion}',
-      if (p.analisis.isNotEmpty) 'Análisis: ${p.analisis}',
-    ].join('\n');
-    final uri = Uri.parse('https://wa.me/?text=${Uri.encodeComponent(text)}');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    final jugador = _jugadores.cast<Jugador?>().firstWhere(
+      (j) => j?.nombre.trim().toLowerCase() == p.nombreJugador.trim().toLowerCase(),
+      orElse: () => _jugadorActivo,
+    );
+    await SocialShareDialog.show(context, partido: p, jugador: jugador);
   }
 
   @override
@@ -2647,6 +2663,14 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
+        ),
+
+        // Grupo Familiar (Sincronización para toda la familia con código)
+        FamilyGroupCard(
+          repo: _repo,
+          jugadores: _jugadores,
+          onFamilyChanged: _loadPartidos,
+          onSnack: (msg, {isError = false}) => _snack(msg, isError: isError),
         ),
 
         // Mapa de predios

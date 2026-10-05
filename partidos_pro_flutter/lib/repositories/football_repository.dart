@@ -7,6 +7,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image/image.dart' as image_lib;
 
+import '../models/familia.dart';
+import '../models/jugador.dart';
 import '../models/partido.dart';
 
 class FootballRepository {
@@ -173,14 +175,245 @@ class FootballRepository {
     await prefs.setString('legacy_claimed_uid', uid);
   }
 
-  Future<List<Partido>> listPartidos() async {
+  // ==========================================
+  // GESTIÓN DE GRUPO FAMILIAR (FAMILY SHARING)
+  // ==========================================
+
+  static const String _prefActiveFamilyId = 'active_family_id';
+  static const String _prefActiveFamilyCode = 'active_family_code';
+  static const String _prefActiveFamilyOwnerUid = 'active_family_owner_uid';
+  static const String _prefActiveFamilyNombre = 'active_family_nombre';
+  static const String _prefIsFamilyAdmin = 'is_family_admin';
+
+  Future<String> _getEffectiveOwnerUid() async {
+    final uid = _uid ?? await _ensureUser();
+    final prefs = await SharedPreferences.getInstance();
+    final familyOwnerUid = prefs.getString(_prefActiveFamilyOwnerUid);
+    if (familyOwnerUid != null && familyOwnerUid.isNotEmpty) {
+      return familyOwnerUid;
+    }
+    return uid;
+  }
+
+  Future<String?> getActiveFamilyCode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_prefActiveFamilyCode);
+  }
+
+  Future<String?> getActiveFamilyNombre() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_prefActiveFamilyNombre);
+  }
+
+  Future<bool> isFamilyAdmin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_prefIsFamilyAdmin) ?? false;
+  }
+
+  Future<bool> isInFamily() async {
+    final prefs = await SharedPreferences.getInstance();
+    final familyId = prefs.getString(_prefActiveFamilyId);
+    return familyId != null && familyId.isNotEmpty;
+  }
+
+  String _generateRandomCode(int length) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rnd = Random();
+    return String.fromCharCodes(
+      Iterable.generate(
+        length,
+        (_) => chars.codeUnitAt(rnd.nextInt(chars.length)),
+      ),
+    );
+  }
+
+  Future<String> getOrCreateFamilyCode({
+    List<Jugador> jugadores = const [],
+    String? nombreFamilia,
+  }) async {
     await connect();
     final uid = _uid ?? await _ensureUser();
+    final prefs = await SharedPreferences.getInstance();
+
+    final cachedCode = prefs.getString(_prefActiveFamilyCode);
+    final cachedOwnerUid = prefs.getString(_prefActiveFamilyOwnerUid);
+    if (cachedCode != null && cachedOwnerUid == uid) {
+      await syncJugadoresToFamily(jugadores);
+      return cachedCode;
+    }
+
+    final existingFamDoc = await _db.collection('familias').doc(uid).get();
+    if (existingFamDoc.exists && existingFamDoc.data() != null) {
+      final data = existingFamDoc.data()!;
+      final existingCode = (data['codigo'] as String? ?? '').toUpperCase();
+      final name = data['nombreFamilia'] as String? ?? nombreFamilia ?? 'Mi Familia';
+
+      await prefs.setString(_prefActiveFamilyId, uid);
+      await prefs.setString(_prefActiveFamilyCode, existingCode);
+      await prefs.setString(_prefActiveFamilyOwnerUid, uid);
+      await prefs.setString(_prefActiveFamilyNombre, name);
+      await prefs.setBool(_prefIsFamilyAdmin, true);
+
+      await syncJugadoresToFamily(jugadores);
+      return existingCode;
+    }
+
+    String newCode = '';
+    var unique = false;
+    var attempts = 0;
+    while (!unique && attempts < 10) {
+      newCode = _generateRandomCode(6);
+      final check = await _db.collection('codigos_familia').doc(newCode).get();
+      if (!check.exists) {
+        unique = true;
+      }
+      attempts++;
+    }
+    if (!unique) {
+      newCode = '${_generateRandomCode(4)}${DateTime.now().millisecond}';
+    }
+
+    final familyName = (nombreFamilia != null && nombreFamilia.trim().isNotEmpty)
+        ? nombreFamilia.trim()
+        : 'Familia ${jugadores.isNotEmpty ? jugadores.first.nombreDisplay : ""}';
+
+    final familyData = {
+      'codigo': newCode,
+      'ownerUid': uid,
+      'nombreFamilia': familyName,
+      'miembros': [uid],
+      'jugadores': jugadores.map((j) => j.toMap()).toList(),
+      'creadoEn': fb_firestore.FieldValue.serverTimestamp(),
+      'actualizadoEn': fb_firestore.FieldValue.serverTimestamp(),
+    };
+    await _db.collection('familias').doc(uid).set(familyData);
+
+    await _db.collection('codigos_familia').doc(newCode).set({
+      'codigo': newCode,
+      'familyId': uid,
+      'ownerUid': uid,
+      'nombreFamilia': familyName,
+      'activo': true,
+      'creadoEn': fb_firestore.FieldValue.serverTimestamp(),
+    });
+
+    await prefs.setString(_prefActiveFamilyId, uid);
+    await prefs.setString(_prefActiveFamilyCode, newCode);
+    await prefs.setString(_prefActiveFamilyOwnerUid, uid);
+    await prefs.setString(_prefActiveFamilyNombre, familyName);
+    await prefs.setBool(_prefIsFamilyAdmin, true);
+
+    return newCode;
+  }
+
+  Future<GrupoFamiliar> joinFamilyWithCode(String rawCode) async {
+    await connect();
+    final uid = _uid ?? await _ensureUser();
+    final code = rawCode.trim().toUpperCase();
+
+    if (code.isEmpty) {
+      throw StateError('Por favor ingresá un código válido.');
+    }
+
+    final codeDoc = await _db.collection('codigos_familia').doc(code).get();
+    if (!codeDoc.exists || codeDoc.data() == null) {
+      throw StateError('El código familiar "$code" no existe o ya caducó.');
+    }
+
+    final codeData = codeDoc.data()!;
+    final familyId = (codeData['familyId'] as String? ?? codeData['ownerUid'] as String);
+
+    final familyDoc = await _db.collection('familias').doc(familyId).get();
+    if (!familyDoc.exists || familyDoc.data() == null) {
+      throw StateError('No se encontró el grupo familiar para este código.');
+    }
+
+    await _db.collection('familias').doc(familyId).update({
+      'miembros': fb_firestore.FieldValue.arrayUnion([uid]),
+      'actualizadoEn': fb_firestore.FieldValue.serverTimestamp(),
+    });
+
+    final grupo = GrupoFamiliar.fromSnapshot(familyDoc);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefActiveFamilyId, familyId);
+    await prefs.setString(_prefActiveFamilyCode, code);
+    await prefs.setString(_prefActiveFamilyOwnerUid, grupo.ownerUid);
+    await prefs.setString(_prefActiveFamilyNombre, grupo.nombreFamilia);
+    await prefs.setBool(_prefIsFamilyAdmin, grupo.ownerUid == uid);
+
+    if (grupo.jugadores.isNotEmpty) {
+      await prefs.setStringList(
+        'jugadores_perfiles',
+        grupo.jugadores.map((j) => j.toJson()).toList(),
+      );
+      await prefs.setStringList(
+        'jugadores',
+        grupo.jugadores.map((j) => j.nombre).toList(),
+      );
+    }
+
+    return grupo;
+  }
+
+  Future<void> leaveFamily() async {
+    await connect();
+    final uid = _uid ?? await _ensureUser();
+    final prefs = await SharedPreferences.getInstance();
+
+    final familyId = prefs.getString(_prefActiveFamilyId);
+    final ownerUid = prefs.getString(_prefActiveFamilyOwnerUid);
+
+    if (familyId != null && ownerUid != uid) {
+      try {
+        await _db.collection('familias').doc(familyId).update({
+          'miembros': fb_firestore.FieldValue.arrayRemove([uid]),
+          'actualizadoEn': fb_firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+    }
+
+    await prefs.remove(_prefActiveFamilyId);
+    await prefs.remove(_prefActiveFamilyCode);
+    await prefs.remove(_prefActiveFamilyOwnerUid);
+    await prefs.remove(_prefActiveFamilyNombre);
+    await prefs.remove(_prefIsFamilyAdmin);
+  }
+
+  Future<GrupoFamiliar?> getActiveFamily() async {
+    await connect();
+    final prefs = await SharedPreferences.getInstance();
+    final familyId = prefs.getString(_prefActiveFamilyId);
+    if (familyId == null || familyId.isEmpty) return null;
+
+    final doc = await _db.collection('familias').doc(familyId).get();
+    if (!doc.exists || doc.data() == null) return null;
+    return GrupoFamiliar.fromSnapshot(doc);
+  }
+
+  Future<void> syncJugadoresToFamily(List<Jugador> jugadores) async {
+    final prefs = await SharedPreferences.getInstance();
+    final familyId = prefs.getString(_prefActiveFamilyId);
+    final isOwner = prefs.getBool(_prefIsFamilyAdmin) ?? false;
+
+    if (familyId != null && familyId.isNotEmpty && isOwner && jugadores.isNotEmpty) {
+      try {
+        await _db.collection('familias').doc(familyId).update({
+          'jugadores': jugadores.map((j) => j.toMap()).toList(),
+          'actualizadoEn': fb_firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<List<Partido>> listPartidos() async {
+    await connect();
+    final effectiveUid = await _getEffectiveOwnerUid();
     final snapshot = _authUnavailable
         ? await _db.collection('historial').get()
         : await _db
               .collection('historial')
-              .where('ownerUid', isEqualTo: uid)
+              .where('ownerUid', isEqualTo: effectiveUid)
               .get();
     final all = snapshot.docs.map(Partido.fromSnapshot).toList();
 
@@ -190,9 +423,15 @@ class FootballRepository {
 
   Future<void> savePartido(Partido partido) async {
     await connect();
-    final uid = _uid ?? await _ensureUser();
+    final effectiveUid = await _getEffectiveOwnerUid();
+    final prefs = await SharedPreferences.getInstance();
+    final familyId = prefs.getString(_prefActiveFamilyId);
+
     final isEditing = partido.documentName != null;
-    final data = partido.toMap(ownerUid: uid, includeCreated: !isEditing);
+    final data = partido.toMap(ownerUid: effectiveUid, includeCreated: !isEditing);
+    if (familyId != null && familyId.isNotEmpty) {
+      data['familyId'] = familyId;
+    }
     if (_authUnavailable) {
       data.remove('ownerUid');
     }
@@ -206,7 +445,9 @@ class FootballRepository {
   Future<void> updatePartidosBatch(List<Partido> partidos) async {
     if (partidos.isEmpty) return;
     await connect();
-    final uid = _uid ?? await _ensureUser();
+    final effectiveUid = await _getEffectiveOwnerUid();
+    final prefs = await SharedPreferences.getInstance();
+    final familyId = prefs.getString(_prefActiveFamilyId);
 
     const chunkSize = 400;
     for (var i = 0; i < partidos.length; i += chunkSize) {
@@ -215,7 +456,10 @@ class FootballRepository {
       var count = 0;
       for (final p in chunk) {
         if (p.documentName != null) {
-          final data = p.toMap(ownerUid: uid, includeCreated: false);
+          final data = p.toMap(ownerUid: effectiveUid, includeCreated: false);
+          if (familyId != null && familyId.isNotEmpty) {
+            data['familyId'] = familyId;
+          }
           if (_authUnavailable) {
             data.remove('ownerUid');
           }
